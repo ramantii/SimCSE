@@ -7,6 +7,8 @@ from typing import Optional, Union, List, Dict, Tuple
 import torch
 import collections
 import random
+import warnings
+from functools import wraps
 
 from datasets import load_dataset
 
@@ -33,9 +35,26 @@ from transformers import (
 from transformers.tokenization_utils_base import BatchEncoding, PaddingStrategy, PreTrainedTokenizerBase
 from transformers.trainer_utils import is_main_process
 from transformers.data.data_collator import DataCollatorForLanguageModeling
-from transformers.file_utils import cached_property, torch_required, is_torch_available, is_torch_tpu_available
+from transformers.file_utils import cached_property, is_torch_available
 from simcse.models import RobertaForCL, BertForCL
 from simcse.trainers import CLTrainer
+
+def torch_required(func):
+    warnings.warn(
+        "The method `torch_required` is deprecated and will be removed in v4.36. Use `requires_backends` instead.",
+        FutureWarning,
+    )
+
+    # Chose a different decorator name than in tests so it's clear they are not the same.
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        if is_torch_available():
+            return func(*args, **kwargs)
+        else:
+            raise ImportError(f"Method `{func.__name__}` requires PyTorch.")
+
+    return wrapper
+
 
 logger = logging.getLogger(__name__)
 MODEL_CONFIG_CLASSES = list(MODEL_FOR_MASKED_LM_MAPPING.keys())
@@ -97,7 +116,7 @@ class ModelArguments:
         metadata={
             "help": "What kind of pooler to use (cls, cls_before_pooler, avg, avg_top2, avg_first_last)."
         }
-    ) 
+    )
     hard_negative_weight: float = field(
         default=0,
         metadata={
@@ -130,7 +149,7 @@ class DataTrainingArguments:
     Arguments pertaining to what data we are going to input our model for training and eval.
     """
 
-    # Huggingface's original arguments. 
+    # Huggingface's original arguments.
     dataset_name: Optional[str] = field(
         default=None, metadata={"help": "The name of the dataset to use (via the datasets library)."}
     )
@@ -153,7 +172,7 @@ class DataTrainingArguments:
 
     # SimCSE's arguments
     train_file: Optional[str] = field(
-        default=None, 
+        default=None,
         metadata={"help": "The training data file (.txt or .csv)."}
     )
     max_seq_length: Optional[int] = field(
@@ -171,7 +190,7 @@ class DataTrainingArguments:
         },
     )
     mlm_probability: float = field(
-        default=0.15, 
+        default=0.15,
         metadata={"help": "Ratio of tokens to mask for MLM (only effective if --do_mlm)"}
     )
 
@@ -187,7 +206,7 @@ class DataTrainingArguments:
 @dataclass
 class OurTrainingArguments(TrainingArguments):
     # Evaluation
-    ## By default, we evaluate STS (dev) during training (for selecting best checkpoints) and evaluate 
+    ## By default, we evaluate STS (dev) during training (for selecting best checkpoints) and evaluate
     ## both STS and transfer tasks (dev) at the end of training. Using --eval_transfer will allow evaluating
     ## both STS and transfer tasks (dev) during training.
     eval_transfer: bool = field(
@@ -202,10 +221,10 @@ class OurTrainingArguments(TrainingArguments):
         if self.no_cuda:
             device = torch.device("cpu")
             self._n_gpu = 0
-        elif is_torch_tpu_available():
-            import torch_xla.core.xla_model as xm
-            device = xm.xla_device()
-            self._n_gpu = 0
+        # elif is_torch_tpu_available():
+        #     import torch_xla.core.xla_model as xm
+        #     device = xm.xla_device()
+        #     self._n_gpu = 0
         elif self.local_rank == -1:
             # if n_gpu is > 1 we'll use nn.DataParallel.
             # If you only want to use a specific subset of GPUs use `CUDA_VISIBLE_DEVICES=0`
@@ -356,7 +375,7 @@ def main():
                 cache_dir=model_args.cache_dir,
                 revision=model_args.model_revision,
                 use_auth_token=True if model_args.use_auth_token else None,
-                model_args=model_args                  
+                model_args=model_args
             )
         elif 'bert' in model_args.model_name_or_path:
             model = BertForCL.from_pretrained(
@@ -402,20 +421,20 @@ def main():
     def prepare_features(examples):
         # padding = longest (default)
         #   If no sentence in the batch exceed the max length, then use
-        #   the max sentence length in the batch, otherwise use the 
+        #   the max sentence length in the batch, otherwise use the
         #   max sentence length in the argument and truncate those that
         #   exceed the max length.
         # padding = max_length (when pad_to_max_length, for pressure test)
         #   All sentences are padded/truncated to data_args.max_seq_length.
         total = len(examples[sent0_cname])
 
-        # Avoid "None" fields 
+        # Avoid "None" fields
         for idx in range(total):
             if examples[sent0_cname][idx] is None:
                 examples[sent0_cname][idx] = " "
             if examples[sent1_cname][idx] is None:
                 examples[sent1_cname][idx] = " "
-        
+
         sentences = examples[sent0_cname] + examples[sent1_cname]
 
         # If hard negative exists
@@ -439,7 +458,7 @@ def main():
         else:
             for key in sent_features:
                 features[key] = [[sent_features[key][i], sent_features[key][i+total]] for i in range(total)]
-            
+
         return features
 
     if training_args.do_train:
@@ -494,7 +513,7 @@ def main():
                 del batch["label_ids"]
 
             return batch
-        
+
         def mask_tokens(
             self, inputs: torch.Tensor, special_tokens_mask: Optional[torch.Tensor] = None
         ) -> Tuple[torch.Tensor, torch.Tensor]:
